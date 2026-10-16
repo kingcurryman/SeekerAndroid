@@ -1,4 +1,25 @@
-﻿using Seeker.Helpers;
+﻿/*
+ * Copyright (c) 2026 kingcurryman
+ * Modified: Added opt-in progressive MP3 download streams while preserving normal downloads.
+ *
+ * This file is part of Seeker
+ *
+ * Seeker is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Seeker is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Seeker. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+using Seeker.Helpers;
+using Seeker.Playback;
 using Seeker.Transfers;
 using Soulseek;
 using System;
@@ -28,6 +49,7 @@ namespace Seeker.Services
 
         // item -> the request that owns it. full lifecycle from queued|locally (before slsk.net has knowledge) to continuation action
         private readonly ConcurrentDictionary<TransferItem, DownloadInfo> activeRequests = new ConcurrentDictionary<TransferItem, DownloadInfo>();
+        private readonly ConcurrentDictionary<TransferItem, ProgressiveDownloadCoordinator> progressiveDownloads = new ConcurrentDictionary<TransferItem, ProgressiveDownloadCoordinator>();
 
         public event EventHandler<int> TransferItemChanged;
         public event EventHandler<Action> TransferListRefreshRequested;
@@ -68,6 +90,63 @@ namespace Seeker.Services
             EnqueueFilesAsync(files, queuePaused, username).ContinueWith(
                 t => logger.Debug("EnqueueFiles failed: " + t.Exception?.InnerException),
                 TaskContinuationOptions.OnlyOnFaulted);
+        }
+
+        public Task<ProgressiveDownloadCoordinator> EnqueueFileForPlaybackAsync(FullFileInfo file, string username)
+        {
+            if (file == null)
+            {
+                throw new ArgumentNullException(nameof(file));
+            }
+            if (!file.FullFileName.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new NotSupportedException("Progressive playback currently supports MP3 files only.");
+            }
+            if (username == PreferencesState.Username)
+            {
+                throw new InvalidOperationException("Files cannot be downloaded from the current account.");
+            }
+
+            return Task.Run(() =>
+            {
+                fileSystemService.GetOrCreateProgressiveSpool(
+                    username,
+                    file.FullFileName,
+                    out string spoolPath,
+                    out string spoolUri,
+                    out string parentUri,
+                    out long partialLength);
+
+                if (partialLength > file.Size)
+                {
+                    fileSystemService.DeleteProgressiveSpool(spoolPath);
+                    partialLength = 0;
+                }
+
+                var coordinator = new ProgressiveDownloadCoordinator(spoolPath, file.Size, partialLength);
+                var dlInfo = AddTransfer(
+                    username,
+                    file.FullFileName,
+                    file.Size,
+                    int.MaxValue,
+                    file.Depth,
+                    queuePaused: false,
+                    wasLatin1Decoded: file.wasFilenameLatin1Decoded,
+                    wasFolderLatin1Decoded: file.wasFolderLatin1Decoded,
+                    isSingle: true);
+                if (dlInfo == null)
+                {
+                    throw new InvalidOperationException("This file is already downloaded or is being downloaded.");
+                }
+
+                dlInfo.ProgressiveDownload = coordinator;
+                dlInfo.TransferItemReference.IncompleteUri = spoolUri;
+                dlInfo.TransferItemReference.IncompleteParentUri = parentUri;
+                progressiveDownloads[dlInfo.TransferItemReference] = coordinator;
+                toaster.ShowToastShort(StringKey.download_is_starting);
+                StartDownloadsFireAndForget(new[] { dlInfo });
+                return coordinator;
+            });
         }
 
         private async Task EnqueueFiles(FullFileInfo[] files, bool queuePaused, string username)
@@ -409,11 +488,35 @@ namespace Seeker.Services
                 dlInfo.HandedToLibrary = true;
                 if (args.Transfer.State.HasFlag(TransferStates.Queued) && args.Transfer.State.HasFlag(TransferStates.Remotely))
                 {
+                    dlInfo.ProgressiveDownload?.MarkWaitingForPeer();
                     logger.Debug($"Queued | Remotely: {fullfilename} We can proceed to download next file.");
                     waitUntilEnqueue.TrySetResult(true);
                 }
+                else if (args.Transfer.State.HasFlag(TransferStates.InProgress))
+                {
+                    dlInfo.ProgressiveDownload?.MarkDownloading();
+                }
             });
-            if (PreferencesState.MemoryBackedDownload)
+            if (dlInfo.ProgressiveDownload != null)
+            {
+                long partialLength = dlInfo.ProgressiveDownload.AvailableBytes;
+                dlTask = soulseekClientFactory().DownloadAsync(
+                    username: username,
+                    remoteFilename: fullfilename,
+                    outputStreamFactory: () => Task.FromResult<Stream>(
+                        new ProgressiveWriteStream(
+                            fileSystemService.OpenProgressiveSpoolStream(dlInfo.ProgressiveDownload.SpoolPath, partialLength),
+                            dlInfo.ProgressiveDownload)),
+                    size: size,
+                    startOffset: partialLength,
+                    options: new TransferOptions(
+                        disposeOutputStreamOnCompletion: true,
+                        governor: SpeedLimitHelper.OurDownloadGovernor,
+                        stateChanged: updateForEnqueue,
+                        seekOutputStreamAutomatically: false),
+                    cancellationToken: cts.Token);
+            }
+            else if (PreferencesState.MemoryBackedDownload)
             {
                 var memStream = new MemoryStream();
                 dlInfo.OutputMemoryStream = memStream;
@@ -761,6 +864,7 @@ namespace Seeker.Services
                     // nothing for us to do - the other transfer is currently processing
                     logger.Debug($"{e.dlInfo?.fullFilename} is already being processed");
                     mainThreadRunner.RunOnUiThread(() => { toaster.ShowToastDebounced(StringKey.error_duplicate, "duplicate"); });
+                    e.dlInfo.ProgressiveDownload?.MarkError(task.Exception ?? new InvalidOperationException("Duplicate transfer."));
                     return;
                 }
                 try
@@ -779,9 +883,11 @@ namespace Seeker.Services
                             // takes precedence over CancelAndRetry
                             logger.Debug("continue with cleanup activity: " + e.dlInfo.fullFilename);
                             DeleteIncompleteFile(e.dlInfo.TransferItemReference, "on cancel and clear");
+                            e.dlInfo.ProgressiveDownload?.MarkCancelled();
                         }
                         else if (retryRequested) //if we pressed "Retry Download" and it was in progress so we first had to cancel...
                         {
+                            e.dlInfo.ProgressiveDownload?.MarkRetrying();
                             try
                             {
                                 //retry download.
@@ -808,12 +914,24 @@ namespace Seeker.Services
                                 }
                             }
                         }
+                        else
+                        {
+                            e.dlInfo.ProgressiveDownload?.MarkCancelled();
+                        }
 
                         return;
                     }
                     else if (task.Status == TaskStatus.Faulted)
                     {
-                        HandleDownloadFaultAndRetryIfApplicable(e, task, failureKind);
+                        bool retrying = HandleDownloadFaultAndRetryIfApplicable(e, task, failureKind);
+                        if (retrying)
+                        {
+                            e.dlInfo.ProgressiveDownload?.MarkRetrying();
+                        }
+                        else
+                        {
+                            e.dlInfo.ProgressiveDownload?.MarkError(DownloadFailureClassifier.GetCause(task.Exception) ?? task.Exception);
+                        }
                         return;
                     }
                     //failed downloads return before getting here...
@@ -830,7 +948,12 @@ namespace Seeker.Services
                     }
                     string finalUri = string.Empty;
                     bool noSubfolder = e.dlInfo.TransferItemReference.TransferItemExtra.HasFlag(Transfers.TransferItemExtras.NoSubfolder);
-                    if (e.dlInfo.OutputMemoryStream != null)
+                    if (e.dlInfo.ProgressiveDownload != null)
+                    {
+                        string path = fileSystemService.SaveProgressiveSpool(e.dlInfo.fullFilename, e.dlInfo.username, e.dlInfo.ProgressiveDownload.SpoolPath, e.dlInfo.Depth, noSubfolder, out finalUri);
+                        fileSystemService.SaveFileToMediaStore(path);
+                    }
+                    else if (e.dlInfo.OutputMemoryStream != null)
                     {
                         e.dlInfo.OutputMemoryStream.TryGetBuffer(out ArraySegment<byte> bytes);
                         string path = fileSystemService.SaveToFile(e.dlInfo.fullFilename, e.dlInfo.username, bytes, null, null, true, e.dlInfo.Depth, noSubfolder, out finalUri);
@@ -851,6 +974,12 @@ namespace Seeker.Services
                     e.dlInfo.TransferItemReference.IncompleteParentUri = null; //not needed anymore.
                     e.dlInfo.TransferItemReference.IncompleteUri = null;
                     e.dlInfo.TransferItemReference.FinalUri = finalUri;
+                    e.dlInfo.ProgressiveDownload?.MarkCompleted(finalUri);
+                }
+                catch (Exception ex)
+                {
+                    e.dlInfo.ProgressiveDownload?.MarkError(ex);
+                    throw;
                 }
                 finally
                 {
@@ -860,7 +989,7 @@ namespace Seeker.Services
             return continuationActionSaveFile;
         }
 
-        private void HandleDownloadFaultAndRetryIfApplicable(DownloadAddedEventArgs e, Task task, DownloadFailureKind kind)
+        private bool HandleDownloadFaultAndRetryIfApplicable(DownloadAddedEventArgs e, Task task, DownloadFailureKind kind)
         {
             var transferItem = e.dlInfo.TransferItemReference;
             string username = e.dlInfo.username;
@@ -882,6 +1011,7 @@ namespace Seeker.Services
                     forceRetry = true;
                     resetRetryCount = true;
                     DeleteIncompleteFile(transferItem, "on TransferSizeMismatchException");
+                    e.dlInfo.ProgressiveDownload?.ResetForRetry(sizeException.RemoteSize);
                     break;
                 }
                 case DownloadFailureKind.DirectoryNotSet:
@@ -953,12 +1083,12 @@ namespace Seeker.Services
                     {
                         // the user already re-requested it
                         logger.Debug($"auto retry of {e.dlInfo.fullFilename} skipped, it is already being requested");
-                        return;
+                        return true;
                     }
                     retryDlInfo.RetryCount = resetRetryCount ? 0 : 1;
                     retryDlInfo.PreviousFailureException = task.Exception;
                     StartDownloadsFireAndForget(new[] { retryDlInfo });
-                    return; //i.e. dont toast anything just retry.
+                    return true; //i.e. dont toast anything just retry.
                 }
                 catch (Exception ex)
                 {
@@ -976,6 +1106,7 @@ namespace Seeker.Services
                 action = () => { toaster.ShowToastLong(StringKey.error_unspecified); };
             }
             mainThreadRunner.RunOnUiThread(action);
+            return false;
         }
 
         public void AddToUserOffline(string username)
@@ -1102,6 +1233,10 @@ namespace Seeker.Services
 
             var cts = new CancellationTokenSource();
             var dlInfo = new DownloadInfo(item.Username, item.FullFilename, item.Size, null, cts, item.QueueLength, item.Failed ? 1 : 0, item.GetDirectoryLevel()) { TransferItemReference = item };
+            if (progressiveDownloads.TryGetValue(item, out ProgressiveDownloadCoordinator progressiveDownload))
+            {
+                dlInfo.ProgressiveDownload = progressiveDownload;
+            }
             if (!TryClaim(dlInfo))
             {
                 return null;

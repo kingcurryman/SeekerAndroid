@@ -1,9 +1,31 @@
-﻿using Android.Content;
+﻿/*
+ * Copyright (c) 2026 kingcurryman
+ * Modified: Added app-private progressive playback spool storage and safe final-file copying.
+ *
+ * This file is part of Seeker
+ *
+ * Seeker is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Seeker is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Seeker. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+using Android.Content;
 using Android.Provider;
 using Java.IO;
 using AndroidX.DocumentFile.Provider;
 using Seeker.Helpers;
 using System;
+using System.Security.Cryptography;
+using System.Text;
 using static Android.Provider.DocumentsContract;
 
 using Common;
@@ -300,6 +322,84 @@ namespace Seeker.Services
             return OpenIncompleteStreamInternal(Android.Net.Uri.Parse(incompleteUri), partialLength);
         }
 
+        public void GetOrCreateProgressiveSpool(
+            string username,
+            string fullfilename,
+            out string spoolPath,
+            out string spoolUri,
+            out string parentUri,
+            out long partialLength)
+        {
+            string key = username + "\n" + fullfilename;
+            string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
+            string root = System.IO.Path.Combine(SeekerApplication.ApplicationContext.FilesDir.AbsolutePath, "progressive");
+            string directory = System.IO.Path.Combine(root, hash);
+            System.IO.Directory.CreateDirectory(directory);
+
+            string filename = SimpleHelpers.GetFileNameFromFile(fullfilename).ToString();
+            spoolPath = System.IO.Path.Combine(directory, filename);
+            partialLength = System.IO.File.Exists(spoolPath) ? new System.IO.FileInfo(spoolPath).Length : 0;
+            spoolUri = Android.Net.Uri.FromFile(new Java.IO.File(spoolPath)).ToString();
+            parentUri = Android.Net.Uri.FromFile(new Java.IO.File(directory)).ToString();
+        }
+
+        public System.IO.Stream OpenProgressiveSpoolStream(string spoolPath, long partialLength)
+        {
+            string directory = System.IO.Path.GetDirectoryName(spoolPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                System.IO.Directory.CreateDirectory(directory);
+            }
+            var stream = new System.IO.FileStream(
+                spoolPath,
+                System.IO.FileMode.OpenOrCreate,
+                System.IO.FileAccess.Write,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+            if (stream.Length != partialLength)
+            {
+                stream.SetLength(partialLength);
+            }
+            stream.Position = partialLength;
+            return stream;
+        }
+
+        public string SaveProgressiveSpool(
+            string fullfilename,
+            string username,
+            string spoolPath,
+            int depth,
+            bool noSubFolder,
+            out string finalUri)
+        {
+            var spoolFile = new Java.IO.File(spoolPath);
+            return SaveToFileInternal(
+                fullfilename,
+                username,
+                default,
+                Android.Net.Uri.FromFile(spoolFile),
+                Android.Net.Uri.FromFile(spoolFile.ParentFile),
+                false,
+                depth,
+                noSubFolder,
+                out finalUri,
+                preserveIncomplete: true);
+        }
+
+        public void DeleteProgressiveSpool(string spoolPath)
+        {
+            if (string.IsNullOrEmpty(spoolPath))
+            {
+                return;
+            }
+
+            System.IO.File.Delete(spoolPath);
+            string parent = System.IO.Path.GetDirectoryName(spoolPath);
+            if (!string.IsNullOrEmpty(parent) && System.IO.Directory.Exists(parent) && System.IO.Directory.GetFileSystemEntries(parent).Length == 0)
+            {
+                System.IO.Directory.Delete(parent);
+            }
+        }
+
         private System.IO.Stream OpenIncompleteStreamInternal(Android.Net.Uri incompleteUri, long partialLength)
         {
             if (PlatformInfo.UseLegacyStorage() && incompleteUri.Scheme == "file")
@@ -385,7 +485,7 @@ namespace Seeker.Services
                 fullfilename, username, bytes,
                 uriOfIncomplete != null ? Android.Net.Uri.Parse(uriOfIncomplete) : null,
                 parentUriOfIncomplete != null ? Android.Net.Uri.Parse(parentUriOfIncomplete) : null,
-                memoryMode, depth, noSubFolder, out finalUri);
+                memoryMode, depth, noSubFolder, out finalUri, preserveIncomplete: false);
         }
 
         private string SaveToFileInternal(
@@ -397,7 +497,8 @@ namespace Seeker.Services
             bool memoryMode,
             int depth,
             bool noSubFolder,
-            out string finalUri)
+            out string finalUri,
+            bool preserveIncomplete)
         {
             string name = SimpleHelpers.GetFileNameFromFile(fullfilename).ToString();
             string dir = SimpleHelpers.GetFolderNameFromFile(fullfilename, depth).ToString();
@@ -459,7 +560,7 @@ namespace Seeker.Services
                 {
                     Java.IO.File inFile = new Java.IO.File(uriOfIncomplete.Path);
                     Java.IO.File inDir = new Java.IO.File(parentUriOfIncomplete.Path);
-                    MoveFile(new FileInputStream(inFile), stream, inFile, inDir);
+                    MoveFile(new FileInputStream(inFile), stream, inFile, inDir, deleteSource: !preserveIncomplete);
                 }
             }
             else
@@ -639,7 +740,7 @@ namespace Seeker.Services
 
                     //106ms for 32mb
                     Android.Net.Uri uri = null;
-                    if (PlatformInfo.PreMoveDocument() ||
+                    if (preserveIncomplete || PlatformInfo.PreMoveDocument() ||
                         SettingsActivity.UseTempDirectory() || //i.e. if use temp dir which is file: // rather than content: //
                         (PlatformInfo.UseLegacyStorage() && SettingsActivity.UseIncompleteManualFolder() && StorageState.RootDocumentFile == null) || //i.e. if use complete dir is file: // rather than content: // but Incomplete is content: //
                         CommonHelpers.CompleteIncompleteDifferentVolume() || !PreferencesState.ManualIncompleteDataDirectoryUriIsFromTree || !PreferencesState.SaveDataDirectoryUriIsFromTree)
@@ -649,9 +750,11 @@ namespace Seeker.Services
                             DocumentFile mFile = CommonHelpers.CreateMediaFile(folderDir1, name);
                             uri = mFile.Uri;
                             finalUri = mFile.Uri.ToString();
-                            using System.IO.Stream inStream = SeekerState.ActiveActivityRef.ContentResolver.OpenInputStream(uriOfIncomplete);
+                            using System.IO.Stream inStream = uriOfIncomplete.Scheme == "file"
+                                ? new System.IO.FileStream(uriOfIncomplete.Path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete)
+                                : SeekerState.ActiveActivityRef.ContentResolver.OpenInputStream(uriOfIncomplete);
                             using System.IO.Stream stream = SeekerState.ActiveActivityRef.ContentResolver.OpenOutputStream(mFile.Uri);
-                            MoveFile(inStream, stream, uriOfIncomplete, parentUriOfIncomplete);
+                            MoveFile(inStream, stream, uriOfIncomplete, parentUriOfIncomplete, deleteSource: !preserveIncomplete);
                         }
                         catch (Exception e)
                         {
@@ -776,7 +879,7 @@ namespace Seeker.Services
             return filePath;
         }
 
-        public void MoveFile(System.IO.Stream from, System.IO.Stream to, Android.Net.Uri toDelete, Android.Net.Uri parentToDelete)
+        public void MoveFile(System.IO.Stream from, System.IO.Stream to, Android.Net.Uri toDelete, Android.Net.Uri parentToDelete, bool deleteSource = true)
         {
             try
             {
@@ -792,6 +895,11 @@ namespace Seeker.Services
             {
                 from.Close();
                 to.Close();
+            }
+
+            if (!deleteSource)
+            {
+                return;
             }
 
             if (SettingsActivity.UseTempDirectory() || toDelete.Scheme == "file")
@@ -888,7 +996,7 @@ namespace Seeker.Services
         }
 
 
-        public void MoveFile(Java.IO.FileInputStream from, Java.IO.FileOutputStream to, Java.IO.File toDelete, Java.IO.File parent)
+        public void MoveFile(Java.IO.FileInputStream from, Java.IO.FileOutputStream to, Java.IO.File toDelete, Java.IO.File parent, bool deleteSource = true)
         {
             try
             {
@@ -905,6 +1013,11 @@ namespace Seeker.Services
                 from.Close();
                 to.Close();
             }
+            if (!deleteSource)
+            {
+                return;
+            }
+
             if (!toDelete.Delete())
             {
                 Logger.Firebase("LEGACY df.Delete() failed to delete ()");
