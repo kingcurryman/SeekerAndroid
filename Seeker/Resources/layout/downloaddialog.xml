@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2026 kingcurryman. Modified: Added progressive MP3 playback controls. -->
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -134,6 +135,31 @@
             app:iconGravity="textStart"
             android:layout_marginStart="16dp"
             android:layout_marginEnd="16dp"
+        />
+        <Button
+            android:foreground="@drawable/button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/buttonPlayNow"
+            android:text="@string/play_now"
+            style="@style/SeekerButtonStyle"
+            android:textSize="14sp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginTop="6dp"
+        />
+        <TextView
+            android:id="@+id/playbackStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
+            android:text="@string/playback_loading"
+            android:textColor="?attr/normalTextColor"
+            android:textSize="13sp"
+            android:visibility="gone"
         />
         <LinearLayout
             android:layout_width="match_parent"

@@ -1,5 +1,7 @@
 ﻿/*
  * Copyright 2021 Seeker
+ * Copyright (c) 2026 kingcurryman
+ * Modified: Added the progressive MP3 Play Now action and playback status display.
  *
  * This file is part of Seeker
  *
@@ -30,6 +32,7 @@ using Common.Search;
 using Google.Android.Material.BottomSheet;
 using Seeker.Extensions.SearchResponseExtensions;
 using Seeker.Helpers;
+using Seeker.Playback;
 using Seeker.Services;
 using Soulseek;
 using System;
@@ -149,6 +152,8 @@ namespace Seeker
         }
 
         private Button downloadButton = null;
+        private Button playNowButton = null;
+        private TextView playbackStatus = null;
         private AndroidX.SwipeRefreshLayout.Widget.SwipeRefreshLayout swipeRefreshLayout = null;
 
         public override void OnViewCreated(View view, Bundle savedInstanceState)
@@ -178,6 +183,11 @@ namespace Seeker
 
             downloadButton = view.FindViewById<Button>(Resource.Id.buttonDownload);
             downloadButton.Click += Download_Click;
+
+            playNowButton = view.FindViewById<Button>(Resource.Id.buttonPlayNow);
+            playNowButton.Click += PlayNow_Click;
+            playbackStatus = view.FindViewById<TextView>(Resource.Id.playbackStatus);
+            ProgressivePlaybackController.Instance.StateChanged += PlaybackController_StateChanged;
 
             Button browseButton = view.FindViewById<Button>(Resource.Id.buttonBrowse);
             browseButton.Click += Browse_Click;
@@ -214,6 +224,13 @@ namespace Seeker
             listView.ChoiceMode = ChoiceMode.Multiple;
             UpdateListView();
             UpdateDownloadButtonText();
+            UpdatePlayNowButton();
+        }
+
+        public override void OnDestroyView()
+        {
+            ProgressivePlaybackController.Instance.StateChanged -= PlaybackController_StateChanged;
+            base.OnDestroyView();
         }
 
         private void UpdateListView()
@@ -284,6 +301,7 @@ namespace Seeker
                 this.customAdapter.SelectedPositions.Remove(e.Position);
             }
             UpdateDownloadButtonText();
+            UpdatePlayNowButton();
         }
 
         private void UpdateDownloadButtonText()
@@ -302,6 +320,92 @@ namespace Seeker
         {
             bool hasSelection = this.customAdapter != null && this.customAdapter.SelectedPositions.Count > 0;
             DownloadWithContinuation(GetFilesToDownload(hasSelection), SearchResponse.Username);
+        }
+
+        private void UpdatePlayNowButton()
+        {
+            if (playNowButton != null)
+            {
+                playNowButton.Enabled = GetFileToPlay() != null;
+            }
+        }
+
+        private File GetFileToPlay()
+        {
+            File file = null;
+            if (customAdapter?.SelectedPositions.Count == 1)
+            {
+                file = SearchResponse.GetElementAtAdapterPosition(
+                    PreferencesState.HideLockedResultsInSearch,
+                    customAdapter.SelectedPositions.Single());
+            }
+            else if (customAdapter?.SelectedPositions.Count == 0)
+            {
+                File[] visibleFiles = SearchResponse.GetFiles(PreferencesState.HideLockedResultsInSearch).ToArray();
+                if (visibleFiles.Length == 1)
+                {
+                    file = visibleFiles[0];
+                }
+            }
+
+            return file != null && file.Filename.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase)
+                ? file
+                : null;
+        }
+
+        private async void PlayNow_Click(object sender, EventArgs e)
+        {
+            File file = GetFileToPlay();
+            if (file == null)
+            {
+                return;
+            }
+
+            try
+            {
+                playNowButton.Enabled = false;
+                playbackStatus.Visibility = ViewStates.Visible;
+                playbackStatus.Text = GetPlaybackStateText(ProgressivePlaybackState.Loading);
+                FullFileInfo fullFile = BrowseUtils.GetFullFileInfos(new[] { file }).Single();
+                await ProgressivePlaybackController.Instance.PlayNowAsync(fullFile, SearchResponse.Username);
+            }
+            catch (Exception exception)
+            {
+                Logger.Debug("Progressive playback failed: " + exception);
+                playbackStatus.Text = GetPlaybackStateText(ProgressivePlaybackState.Error);
+                SeekerApplication.Toaster.ShowToast(playbackStatus.Text, ToastLength.Long);
+            }
+            finally
+            {
+                UpdatePlayNowButton();
+            }
+        }
+
+        private void PlaybackController_StateChanged(object sender, ProgressivePlaybackState newState)
+        {
+            Activity?.RunOnUiThread(() =>
+            {
+                if (playbackStatus == null)
+                {
+                    return;
+                }
+                playbackStatus.Visibility = ViewStates.Visible;
+                playbackStatus.Text = GetPlaybackStateText(newState);
+            });
+        }
+
+        private string GetPlaybackStateText(ProgressivePlaybackState playbackState)
+        {
+            int resource = playbackState switch
+            {
+                ProgressivePlaybackState.WaitingForPeer => Resource.String.playback_waiting_for_peer,
+                ProgressivePlaybackState.Buffering => Resource.String.playback_buffering,
+                ProgressivePlaybackState.Playing => Resource.String.playback_playing,
+                ProgressivePlaybackState.Error => Resource.String.playback_error,
+                ProgressivePlaybackState.Cancelled => Resource.String.playback_cancelled,
+                _ => Resource.String.playback_loading,
+            };
+            return GetString(resource);
         }
 
         private void Browse_Click(object sender, EventArgs e)

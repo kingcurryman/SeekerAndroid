@@ -1,4 +1,5 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<!-- Copyright (c) 2026 kingcurryman. Modified: Added Media3 dependencies for progressive MP3 playback. -->
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AndroidHttpClientHandlerType>Xamarin.Android.Net.AndroidMessageHandler</AndroidHttpClientHandlerType>
@@ -98,6 +99,8 @@
     </When>
   </Choose>
   <ItemGroup>
+    <PackageReference Include="Xamarin.AndroidX.Media3.DataSource" Version="1.11.1" />
+    <PackageReference Include="Xamarin.AndroidX.Media3.ExoPlayer" Version="1.11.1" />
     <PackageReference Include="Microsoft.NET.StringTools">
       <Version>18.3.3</Version>
     </PackageReference>

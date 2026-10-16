@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2026 kingcurryman. Modified: Added progressive playback strings. -->
 <resources>
     <string name="app_name">Seeker</string>
     <string name="com.google.firebase.crashlytics.mapping_file_id">1.0</string>
@@ -999,4 +1000,11 @@
     <string name="keywords_edit_user_info">profile bio</string>
     <string name="keywords_restore_defaults">reset factory</string>
 
+    <string name="play_now">Play Now</string>
+    <string name="playback_loading">Loading</string>
+    <string name="playback_waiting_for_peer">Waiting for peer</string>
+    <string name="playback_buffering">Buffering</string>
+    <string name="playback_playing">Playing</string>
+    <string name="playback_error">Playback error</string>
+    <string name="playback_cancelled">Playback cancelled</string>
 </resources>
