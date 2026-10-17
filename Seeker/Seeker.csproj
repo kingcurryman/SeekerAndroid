@@ -1,4 +1,4 @@
-﻿<!-- Copyright (c) 2026 kingcurryman. Modified: Added Media3 dependencies for progressive MP3 playback. -->
+﻿<!-- Copyright (c) 2026 kingcurryman. Modified: Added Media3 playback and the Song Seeker Android application identity. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,8 +7,10 @@
     <AndroidManagedSymbols>true</AndroidManagedSymbols>
     <TargetFramework>net10.0-android36.0</TargetFramework>
     <SupportedOSPlatformVersion>23</SupportedOSPlatformVersion>
-    <AssemblyTitle>AndriodApp1</AssemblyTitle>
-    <Product>AndriodApp1</Product>
+    <ApplicationId>com.kingcurryman.songseeker</ApplicationId>
+    <ApplicationTitle>Song Seeker</ApplicationTitle>
+    <AssemblyTitle>Song Seeker</AssemblyTitle>
+    <Product>Song Seeker</Product>
     <Copyright>Copyright ©  2018</Copyright>
     <AssemblyVersion>1.1.0.0</AssemblyVersion>
     <FileVersion>1.1.0.0</FileVersion>
@@ -55,6 +57,9 @@
 		<AndroidSigningKeyAlias>$(AndroidSigningKeyAlias)</AndroidSigningKeyAlias>
 		<AndroidSigningKeyPass>$(AndroidSigningKeyPass)</AndroidSigningKeyPass>
 		<AndroidSigningStorePass>$(AndroidSigningStorePass)</AndroidSigningStorePass>
+	</PropertyGroup>
+	<PropertyGroup Condition="$(Configuration.StartsWith('Debug'))">
+		<AndroidKeyStore>false</AndroidKeyStore>
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release IzzySoft|AnyCPU'">
 	  <AndroidProguardMappingFile>$(OutputPath)mapping.txt</AndroidProguardMappingFile>

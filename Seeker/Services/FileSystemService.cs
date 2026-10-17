@@ -850,7 +850,7 @@ namespace Seeker.Services
                                     Logger.InfoFirebase("uri!=null");
                                     Logger.Firebase("CRITICAL FILESYSTEM ERROR " + e.Message + " path child: " + Android.Net.Uri.Decode(uriOfIncomplete.ToString()) + " path parent: " + Android.Net.Uri.Decode(parentUriOfIncomplete.ToString()) + " path dest: " + Android.Net.Uri.Decode(folderDir1?.Uri?.ToString()));
                                     SeekerApplication.Toaster.ShowToast("Error Saving File", Android.Widget.ToastLength.Long);
-                                    Logger.Debug(e.Message + " " + uriOfIncomplete.Path); //Unknown Authority happens when source is file :/// storage/emulated/0/Android/data/com.companyname.andriodapp1/files/Soulseek%20Incomplete/
+                                    Logger.Debug(e.Message + " " + uriOfIncomplete.Path); //Unknown Authority happens when source is file :/// storage/emulated/0/Android/data/com.kingcurryman.songseeker/files/Soulseek%20Incomplete/
                                 }
                             }
                         }

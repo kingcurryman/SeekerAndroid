@@ -20,6 +20,8 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
       PROJECT: Seeker/Seeker.csproj
       CONFIGURATION: Debug
+      APPLICATION_ID: com.kingcurryman.songseeker
+      MIN_SDK: '23'
 
     steps:
       - name: Checkout
@@ -61,7 +63,8 @@ jobs:
             --framework "$TFM" \
             --no-restore \
             -p:AndroidKeyStore=false \
-            -p:AndroidPackageFormat=apk \
+            -p:AndroidPackageFormats=apk \
+            -p:AndroidEnableFastDeployment=false \
             -p:EmbedAssembliesIntoApk=true \
             -p:ContinuousIntegrationBuild=true
 
@@ -69,30 +72,45 @@ jobs:
         run: |
           APK=$(find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*-Signed.apk' -print -quit)
           if [ -z "$APK" ]; then
-            APK=$(find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*.apk' ! -name '*-unsigned.apk' -print -quit)
-          fi
-          if [ -z "$APK" ]; then
-            echo '::error::No installable APK was produced'
+            echo '::error::No signed, installable APK was produced'
             find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*.apk' -print || true
             exit 1
           fi
 
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)
+          APK_ANALYZER=$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name apkanalyzer -print | head -n 1)
           if [ -z "$APKSIGNER" ]; then
             echo '::error::Android apksigner was not found'
             exit 1
           fi
-          "$APKSIGNER" verify --verbose "$APK"
+          if [ -z "$APK_ANALYZER" ]; then
+            echo '::error::Android apkanalyzer was not found'
+            exit 1
+          fi
 
           mkdir -p artifacts
-          cp "$APK" artifacts/seeker-debug.apk
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee artifacts/apksigner-verification.txt
+
+          ACTUAL_APPLICATION_ID=$("$APK_ANALYZER" manifest application-id "$APK" | tr -d '\r\n')
+          ACTUAL_MIN_SDK=$("$APK_ANALYZER" manifest min-sdk "$APK" | tr -d '\r\n')
+          if [ "$ACTUAL_APPLICATION_ID" != "$APPLICATION_ID" ]; then
+            echo "::error::Expected application ID $APPLICATION_ID, found $ACTUAL_APPLICATION_ID"
+            exit 1
+          fi
+          if [ "$ACTUAL_MIN_SDK" != "$MIN_SDK" ]; then
+            echo "::error::Expected minimum SDK $MIN_SDK, found $ACTUAL_MIN_SDK"
+            exit 1
+          fi
+
+          "$APK_ANALYZER" manifest print "$APK" > artifacts/AndroidManifest.xml
+          cp "$APK" artifacts/song-seeker-debug.apk
           cp LICENSE artifacts/LICENSE
-          ls -lh artifacts/seeker-debug.apk
+          ls -lh artifacts/song-seeker-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: seeker-debug-apk
+          name: song-seeker-debug-apk
           path: artifacts/
           if-no-files-found: error
           retention-days: 14

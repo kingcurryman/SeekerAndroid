@@ -1,6 +1,8 @@
-<!-- Copyright (c) 2026 kingcurryman. Modified: Added progressive playback strings. -->
+<!-- Copyright (c) 2026 kingcurryman. Modified: Added progressive playback and Song Seeker branding strings. -->
 <resources>
-    <string name="app_name">Seeker</string>
+    <string name="app_name">Song Seeker</string>
+    <string name="song_seeker_app_name" translatable="false">Song Seeker</string>
+    <string name="song_seeker_about_body" translatable="false">Song Seeker is an independent modified version of Seeker and uses a modified Soulseek.NET library. It is not maintained by, endorsed by, or affiliated with the original projects or their authors.</string>
     <string name="com.google.firebase.crashlytics.mapping_file_id">1.0</string>
 
     <string name="home_tab">Home</string>
