@@ -884,6 +884,7 @@ namespace Seeker.Services
                             logger.Debug("continue with cleanup activity: " + e.dlInfo.fullFilename);
                             DeleteIncompleteFile(e.dlInfo.TransferItemReference, "on cancel and clear");
                             e.dlInfo.ProgressiveDownload?.MarkCancelled();
+                            progressiveDownloads.TryRemove(e.dlInfo.TransferItemReference, out _);
                         }
                         else if (retryRequested) //if we pressed "Retry Download" and it was in progress so we first had to cancel...
                         {
@@ -975,6 +976,10 @@ namespace Seeker.Services
                     e.dlInfo.TransferItemReference.IncompleteUri = null;
                     e.dlInfo.TransferItemReference.FinalUri = finalUri;
                     e.dlInfo.ProgressiveDownload?.MarkCompleted(finalUri);
+                    if (e.dlInfo.ProgressiveDownload != null)
+                    {
+                        progressiveDownloads.TryRemove(e.dlInfo.TransferItemReference, out _);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1241,6 +1246,7 @@ namespace Seeker.Services
             {
                 return null;
             }
+            dlInfo.ProgressiveDownload?.MarkRetrying();
             TransferState.SetupCancellationToken(item, cts, out _);
             item.ClearStateForRetry();
             // same initial state as AddTransfer

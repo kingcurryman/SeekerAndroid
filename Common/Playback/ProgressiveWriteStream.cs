@@ -73,12 +73,14 @@ namespace Seeker.Playback
         public override void Write(byte[] buffer, int offset, int count)
         {
             inner.Write(buffer, offset, count);
+            inner.Flush();
             coordinator.ReportCommittedBytes(inner.Position);
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             await inner.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            await inner.FlushAsync(cancellationToken).ConfigureAwait(false);
             coordinator.ReportCommittedBytes(inner.Position);
         }
 

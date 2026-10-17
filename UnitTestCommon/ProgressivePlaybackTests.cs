@@ -29,8 +29,8 @@ namespace UnitTestCommon
     [TestFixture]
     public sealed class ProgressivePlaybackTests
     {
-        private string testDirectory;
-        private string spoolPath;
+        private string testDirectory = null!;
+        private string spoolPath = null!;
 
         [SetUp]
         public void SetUp()
@@ -111,9 +111,10 @@ namespace UnitTestCommon
             var coordinator = new ProgressiveDownloadCoordinator(spoolPath, expectedBytes: 2);
             using var reader = new ProgressiveFileReader(coordinator, position: 0);
             byte[] readBuffer = new byte[2];
-            Task<int> readTask = Task.Run(() => reader.Read(readBuffer, 0, readBuffer.Length));
 
+            coordinator.MarkCancelled();
             coordinator.MarkRetrying();
+            Task<int> readTask = Task.Run(() => reader.Read(readBuffer, 0, readBuffer.Length));
             Assert.That(await Task.WhenAny(readTask, Task.Delay(100)), Is.Not.SameAs(readTask));
 
             using (var output = new ProgressiveWriteStream(OpenWriter(), coordinator))

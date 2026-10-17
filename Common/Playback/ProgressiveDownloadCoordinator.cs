@@ -31,7 +31,7 @@ namespace Seeker.Playback
         private long expectedBytes;
         private bool completed;
         private bool cancelled;
-        private Exception error;
+        private Exception? error;
         private ProgressivePlaybackState state;
 
         public ProgressiveDownloadCoordinator(string spoolPath, long expectedBytes, long availableBytes = 0)
@@ -59,7 +59,7 @@ namespace Seeker.Playback
 
         public string FinalUri { get; private set; } = string.Empty;
 
-        public event EventHandler<ProgressivePlaybackState> StateChanged;
+        public event EventHandler<ProgressivePlaybackState>? StateChanged;
 
         public ProgressivePlaybackState State
         {
@@ -117,7 +117,18 @@ namespace Seeker.Playback
 
         public void MarkRetrying()
         {
-            SetNonTerminalState(ProgressivePlaybackState.Retrying);
+            lock (sync)
+            {
+                if (completed)
+                {
+                    return;
+                }
+                cancelled = false;
+                error = null;
+                state = ProgressivePlaybackState.Retrying;
+                Monitor.PulseAll(sync);
+            }
+            RaiseStateChanged(ProgressivePlaybackState.Retrying);
         }
 
         public void ReportCommittedBytes(long position)

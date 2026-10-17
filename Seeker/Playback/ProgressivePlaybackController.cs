@@ -108,7 +108,7 @@ namespace Seeker.Playback
                 });
                 await ready.Task.ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (System.OperationCanceledException)
             {
                 if (!localStartupCancellation.IsCancellationRequested)
                 {
