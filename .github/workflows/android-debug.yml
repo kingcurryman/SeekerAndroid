@@ -1,0 +1,98 @@
+name: Build Android Debug APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    name: Build standalone debug APK
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      PROJECT: Seeker/Seeker.csproj
+      CONFIGURATION: Debug
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Android workload
+        run: dotnet workload restore "$PROJECT"
+
+      - name: Determine target framework
+        run: |
+          TFM=$(dotnet msbuild "$PROJECT" -getProperty:TargetFramework -v:q | tr -d '[:space:]')
+          echo "TFM=$TFM" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK dependencies
+        run: |
+          dotnet build "$PROJECT" \
+            --target InstallAndroidDependencies \
+            --framework "$TFM" \
+            -p:AcceptAndroidSDKLicenses=true
+
+      - name: Restore packages
+        run: dotnet restore "$PROJECT"
+
+      - name: Build standalone debug APK
+        run: |
+          dotnet publish "$PROJECT" \
+            --configuration "$CONFIGURATION" \
+            --framework "$TFM" \
+            --no-restore \
+            -p:AndroidKeyStore=false \
+            -p:AndroidPackageFormat=apk \
+            -p:EmbedAssembliesIntoApk=true \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Stage and verify APK
+        run: |
+          APK=$(find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*-Signed.apk' -print -quit)
+          if [ -z "$APK" ]; then
+            APK=$(find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*.apk' ! -name '*-unsigned.apk' -print -quit)
+          fi
+          if [ -z "$APK" ]; then
+            echo '::error::No installable APK was produced'
+            find "Seeker/bin/$CONFIGURATION/$TFM" -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo '::error::Android apksigner was not found'
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$APK"
+
+          mkdir -p artifacts
+          cp "$APK" artifacts/seeker-debug.apk
+          cp LICENSE artifacts/LICENSE
+          ls -lh artifacts/seeker-debug.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: seeker-debug-apk
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
