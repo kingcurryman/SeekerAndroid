@@ -864,7 +864,9 @@ namespace Seeker.Services
                     // nothing for us to do - the other transfer is currently processing
                     logger.Debug($"{e.dlInfo?.fullFilename} is already being processed");
                     mainThreadRunner.RunOnUiThread(() => { toaster.ShowToastDebounced(StringKey.error_duplicate, "duplicate"); });
-                    e.dlInfo.ProgressiveDownload?.MarkError(task.Exception ?? new InvalidOperationException("Duplicate transfer."));
+                    Exception duplicateException = DownloadFailureClassifier.GetCause(task.Exception)
+                        ?? new InvalidOperationException("Duplicate transfer.");
+                    e.dlInfo.ProgressiveDownload?.MarkError(duplicateException);
                     return;
                 }
                 try
